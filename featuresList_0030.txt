@@ -1,0 +1,21 @@
+Features: 
+- Board generation & display
+- UI display
+- Obstacles
+- Player movement
+- Player characteristics (Health, Power)
+- Pattern generation
+- Pattern holding
+- Enemies
+	- Spawning
+	- Display
+	- Behavior
+	- Characteristics (Health, Power, Pattern)
+	- Classes
+- Combat
+- Combo & Power
+- Scoring
+- Thresholds
+- Enemy waves
+- Levels
+- Victory condition
