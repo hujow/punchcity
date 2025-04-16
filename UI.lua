@@ -149,10 +149,28 @@ local function drawRightPanel(
     local hbY = panelY + yOffset
     local hbW = panelW - 20
     local hbH = 20
-    local slotW = hbW / player.maxHealth
+    
+    -- Get player health from component
+    local playerHealth = 0
+    local playerMaxHealth = 1
+    
+    -- Check if player is an entity with components
+    if player and player.getComponent then
+        local healthComponent = player:getComponent("health")
+        if healthComponent then
+            playerHealth = healthComponent.health
+            playerMaxHealth = healthComponent.maxHealth
+        end
+    else
+        -- Fallback for old player format
+        playerHealth = player.health or 0
+        playerMaxHealth = player.maxHealth or 1
+    end
+    
+    local slotW = hbW / playerMaxHealth
 
-    for i = 0, player.maxHealth - 1 do
-        if i < player.health then
+    for i = 0, playerMaxHealth - 1 do
+        if i < playerHealth then
             love.graphics.setColor(colors.PlayerHealthFull)
         else
             love.graphics.setColor(colors.PlayerHealthEmpty)
@@ -178,7 +196,17 @@ local function drawRightPanel(
     yOffset = yOffset + 30
 
     -- Invincibility
-    if player.invincible then
+    local playerInvincible = false
+    if player and player.getComponent then
+        local healthComponent = player:getComponent("health")
+        if healthComponent then
+            playerInvincible = healthComponent.isInvincible or player.invincible
+        end
+    else
+        playerInvincible = player.invincible or false
+    end
+    
+    if playerInvincible then
         love.graphics.setColor(colors.invincibleText)
         love.graphics.setFont(UI.invincibleFont)
         love.graphics.print("INVINCIBLE!", panelX + 10, panelY + yOffset)

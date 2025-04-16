@@ -279,7 +279,16 @@ end
 
 -- Draw the player
 function Player.draw(playerEntity)
-    playerEntity:draw()
+    -- Use the parameter if provided, otherwise use the stored entity
+    local entity = playerEntity or Player.entity
+    
+    -- Make sure we have a valid entity
+    if not entity then
+        print("Warning: No player entity to draw")
+        return
+    end
+    
+    entity:draw()
 end
 
 -- Property getters and setters for compatibility with existing code
