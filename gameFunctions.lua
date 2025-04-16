@@ -13,7 +13,7 @@ local UI = require("UI")
 
 
 -- Update Combo Meter
-function GameFunctions.updatecomboMeter(hitEnemy)
+function GameFunctions.updateComboMeter(hitEnemy)
     if hitEnemy then
         if not GameData.comboMeter.isActive then
             GameData.comboMeter.isActive = true
@@ -48,33 +48,39 @@ end
 -- Apply Damage
 function GameFunctions.onDamage(targetEntity, dmgDealt)
     if dmgDealt <= 0 then return end
+    
     if targetEntity.__isPlayer then
         -- Player took damage
         local health = Player.entity:getComponent("health")
-        health.health = health.health - dmgDealt
-        
-        -- Emit player damage event
-        EventManager:emit("player_damaged", Player, dmgDealt)
-        
-        -- Because the player was hit, reset the combo
-        GameFunctions.updateComboMeter(false)
-        
-        if health.health <= 0 then
-            EventManager:emit("game_state_changed", "gameover")
+        if health then
+            health.health = health.health - dmgDealt
+            
+            -- Emit player damage event
+            EventManager:emit("player_damaged", Player.entity, dmgDealt)
+            
+            -- Because the player was hit, reset the combo
+            GameFunctions.updateComboMeter(false)
+            
+            if health.health <= 0 then
+                EventManager:emit("game_state_changed", "gameover")
+            end
         end
     else
-        -- Enemy took damage => decrease HP here
-        local oldHealth = targetEntity.health
-        targetEntity.health = targetEntity.health - dmgDealt
-        
-        -- Emit enemy damage event
-        EventManager:emit("enemy_damaged", targetEntity, dmgDealt)
-        
-        Enemy.recordHit(targetEntity, dmgDealt)
-        
-        -- Check if enemy was killed
-        if oldHealth > 0 and targetEntity.health <= 0 then
-            EventManager:emit("enemy_killed", targetEntity)
+        -- Enemy took damage
+        local health = targetEntity:getComponent("health")
+        if health then
+            local oldHealth = health.health
+            health.health = health.health - dmgDealt
+            
+            -- Emit enemy damage event
+            EventManager:emit("enemy_damaged", targetEntity, dmgDealt)
+            
+            Enemy.recordHit(targetEntity, dmgDealt)
+            
+            -- Check if enemy was killed
+            if oldHealth > 0 and health.health <= 0 then
+                EventManager:emit("enemy_killed", targetEntity)
+            end
         end
     end
 end
@@ -341,9 +347,14 @@ end
 
 -- Enemy Knockback
 function GameFunctions.onEnemyKnockback(enemy, dx, dy)
-    -- We'll pass our main damage callback as well:
     local ref = { value = GameData.enemyHitDuringMovement }
-    Enemy.applyKnockback(enemy, dx, dy, GameFunctions.updatecomboMeter, ref, GameFunctions.onDamage)
+    Enemy.applyKnockback(
+        enemy, 
+        dx, dy, 
+        GameFunctions.updateComboMeter, 
+        ref, 
+        GameFunctions.onDamage
+    )
     GameData.enemyHitDuringMovement = ref.value
 end
 

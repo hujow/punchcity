@@ -65,7 +65,7 @@ local function setPosition(entity, x, y)
             pos.y = y
         end
     else
-        -- Legacy style direct properties
+        -- Legacy style entity with direct properties
         entity.x = x
         entity.y = y
     end
@@ -336,7 +336,7 @@ function Enemy.updateMovementPhase(dt, playerEntity, onPlayerHit)
         Enemy.isMovementPhase = false
 
         -- Disable player invincibility after ALL enemies have moved
-        if playerEntity.invincible then
+        if playerEntity and playerEntity.invincible then
             playerEntity.invincible = false
         end
         
@@ -476,10 +476,13 @@ end
 -- Knockback / Scoring
 --------------------------------------------------------------------------------
 function Enemy.recordHit(enemy, damageDealt)
-    if damageDealt > 0 and not enemy.alreadyHit then
+    if damageDealt <= 0 then return end
+    
+    if not enemy.alreadyHit then
         Enemy.enemiesHit = Enemy.enemiesHit + 1
         enemy.alreadyHit = true
     end
+    
     Enemy.totalHealthLost = Enemy.totalHealthLost + damageDealt
     
     -- Emit enemy hit event
@@ -496,7 +499,7 @@ function Enemy.applyKnockback(enemy, dx, dy, onComboUpdate, enemyHitDuringMoveme
         nil,               -- no explicit Player reference
         onComboUpdate,
         pinnedRef,
-        1,                 -- base push damage
+        config.BASE_PUSH_DAMAGE,
         onDamage
     )
     
