@@ -221,14 +221,18 @@ end
 function GameFunctions.superKnockback()
     if not GameData.superKnockbackAvailable then return end
 
+    -- Get player position properly
+    local position = Player.entity:getComponent("position")
+    if not position then return end
+
     -- 1) Clear out previous blink tiles
     GameData.superKnockbackTiles = {}
 
     -- 2) Mark all tiles in radius for blinking
     for i = -GameData.SUPER_KNOCKBACK_RADIUS, GameData.SUPER_KNOCKBACK_RADIUS do
         for j = -GameData.SUPER_KNOCKBACK_RADIUS, GameData.SUPER_KNOCKBACK_RADIUS do
-            local tileX = Player.entity.x + i
-            local tileY = Player.entiy.y + j
+            local tileX = position.x + i
+            local tileY = position.y + j
 
             -- Must be inside the board
             if tileX >= 1 and tileX <= config.GRID_SIZE
@@ -249,21 +253,21 @@ function GameFunctions.superKnockback()
     -- 3) Actually knock back all enemies in that radius
     local knockDist = 2
     for _, enemy in ipairs(Enemy.list) do
-        local dx = enemy.x - Player.entity.x
-        local dy = enemy.y - Player.entity.y
+        local enemyPos = getPosition(enemy)
+        local dx = enemyPos.x - position.x
+        local dy = enemyPos.y - position.y
         local distance = math.sqrt(dx*dx + dy*dy)
         if distance <= GameData.SUPER_KNOCKBACK_RADIUS then
             local knockbackX = math.floor(
-                math.max(1, math.min(config.GRID_SIZE, enemy.x + (dx / distance) * knockDist))
+                math.max(1, math.min(config.GRID_SIZE, enemyPos.x + (dx / distance) * knockDist))
             )
             local knockbackY = math.floor(
-                math.max(1, math.min(config.GRID_SIZE, enemy.y + (dy / distance) * knockDist))
+                math.max(1, math.min(config.GRID_SIZE, enemyPos.y + (dy / distance) * knockDist))
             )
 
             local passable = board.isPassable(knockbackX, knockbackY)
             if passable then
-                enemy.x = knockbackX
-                enemy.y = knockbackY
+                setPosition(enemy, knockbackX, knockbackY)
             else
                 -- Optionally do "slam" damage for hitting a wall
                 -- local SLAM_BONUS = 1
@@ -275,8 +279,11 @@ function GameFunctions.superKnockback()
 
             -- Visual feedback
             enemy.hit = true
-            enemy.isBlinking = true
-            enemy.blinkTime  = enemy.blinkDuration
+            
+            local renderer = enemy:getComponent("renderer")
+            if renderer then
+                renderer:startBlinking()
+            end
         end
     end
 
@@ -302,10 +309,14 @@ function GameFunctions.getOppositeDirection(direction)
 end
 
 -- Create Preview Path
+-- In gameFunctions.lua
 function GameFunctions.createPreviewPath(direction)
     local previewPattern = GameFunctions.translatePattern(patterns[GameData.currentPatternName], direction)
     local path = {}
-    local x, y = Player.x, Player.y
+    
+    -- Get player position properly
+    local position = Player.entity:getComponent("position")
+    local x, y = position.x, position.y
 
     for _, move in ipairs(previewPattern) do
         local dx, dy = move[1], move[2]
