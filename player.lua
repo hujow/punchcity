@@ -1,152 +1,42 @@
--- player.lua (fully refactored)
-local Entity = require("entity")
-local PositionComponent = require("components.PositionComponent")
-local HealthComponent = require("components.HealthComponent")
-local RenderComponent = require("components.RenderComponent")
-local config = require("config")
-local EventManager = require("eventManager")
-local board = require("board")
-local GameData = require("gameData")
+﻿-- player.lua
+local config     = require("config")
+local ChainPush  = require("chainpush")
+local board     = require("board")
+local Crate     = require("crate")
+
 
 local Player = {
-    entity = nil -- Will store the player entity instance
+    __isPlayer = true,
+    x = 5,
+    y = 5,
+    rotation      = 0,
+    health        = 4,
+    maxHealth     = 4,
+    isBlinking    = false,
+    blinkTime     = 0,
+    blinkDuration = 1.0,
+    skipTurn      = false,
+    hitThisTurn   = false,
+    invincible    = false,
+    moveTimer     = 0, 
+    gold = 0,
 }
 
-function Player.getX()
-    return Player.entity:getComponent("position").x
+function Player.reset(spawnX, spawnY)
+    Player.x = spawnX or 1          -- fallback keeps menus & old code alive
+    Player.y = spawnY or 1
+    Player.rotation      = 0
+    Player.health        = 4
+    Player.maxHealth     = 4
+    Player.isBlinking    = false
+    Player.blinkTime     = 0
+    Player.blinkDuration = 1.0
+    Player.skipTurn      = false
+    Player.hitThisTurn   = false
+    Player.invincible    = false
+    Player.moveTimer     = 0
 end
 
-function Player.getY()
-    return Player.entity:getComponent("position").y
-end
-
-function Player.getHealth()
-    return Player.entity:getComponent("health").health
-end
-
-function Player.getMaxHealth()
-    return Player.entity:getComponent("health").maxHealth
-end
-
-function Player.setInvincible(value)
-    Player.entity.invincible = value
-    Player.entity:getComponent("health").isInvincible = value
-end
-
-function Player.create(x, y)
-    local playerEntity = Entity.new()
-    
-    -- Add components
-    playerEntity:addComponent(PositionComponent.new(x or 6, y or 6))
-    playerEntity:addComponent(HealthComponent.new(4))
-    
-    -- Add player-specific properties
-    playerEntity.moveTimer = 0
-    playerEntity.skipTurn = false
-    playerEntity.isPlayer = true
-    playerEntity.invincible = false
-    playerEntity.__isPlayer = true -- For compatibility with existing code
-    
-    -- Create player sprite renderer
-    local renderer = RenderComponent.new({1, 1, 1}, 1.0)
-    
-    -- Override draw method for player-specific sprite rendering
-    function renderer:draw()
-        local position = self.entity:getComponent("position")
-        if not position then return end
-        
-        -- Only draw if not blinking or on a visible blink frame
-        if (not self.isBlinking) or (math.floor(self.blinkTime * 10) % 2 == 0) then
-            local spriteSheet = love.graphics.newImage('sprites/player_sheet.png')
-            local spriteWidth = 64
-            local spriteHeight = 64
-            local frameCount = 2
-            local currentFrame = 1
-            
-            local halfTile = config.TILE_SIZE / 2
-            local spriteX = config.GRID_START_X + (position.x - 1) * config.TILE_SIZE + halfTile
-            local spriteY = config.GRID_START_Y + (position.y - 1) * config.TILE_SIZE + halfTile
-            
-            local quad = love.graphics.newQuad(
-                (currentFrame - 1) * spriteWidth,  -- X offset within the sprite sheet
-                0,                                  -- Y offset (if all frames are in row 1)
-                spriteWidth,                        -- width of one frame
-                spriteHeight,                       -- height of one frame
-                spriteSheet:getWidth(),
-                spriteSheet:getHeight()
-            )
-            
-            local scale = config.TILE_SIZE / spriteWidth
-            
-            love.graphics.draw(
-                spriteSheet,
-                quad,
-                spriteX,
-                spriteY,
-                position.rotation,
-                scale,          -- scale X
-                scale,          -- scale Y
-                spriteWidth/2,  -- origin X (half of sprite's width)
-                spriteHeight/2  -- origin Y (half of sprite's height)
-            )
-        end
-    end
-    
-    playerEntity:addComponent(renderer)
-    
-    -- Add event listeners for player-specific events
-    EventManager:on("entity_damaged", function(entity, amount)
-        if entity == playerEntity and not playerEntity.invincible then
-            -- Player was damaged
-            renderer:startBlinking()
-            
-            -- Reset combo
-            EventManager:emit("combo_reset")
-            
-            -- Check for game over
-            if entity:getComponent("health"):isDead() then
-                EventManager:emit("game_state_changed", "gameover")
-            end
-        end
-    end)
-
-    Player.entity = playerEntity
-    
-    return playerEntity
-end
-
--- Reset player to initial state
-function Player.reset()
-    if not Player.entity then
-        -- Create a default player if none exists
-        Player.create(6, 6)
-        return
-    end
-    
-    local position = Player.entity:getComponent("position")
-    local health = Player.entity:getComponent("health")
-    
-    position.x = 6
-    position.y = 6
-    position.rotation = 0
-    
-    health.health = health.maxHealth
-    
-    Player.entity.invincible = false
-    Player.entity.skipTurn = false
-    Player.entity.moveTimer = 0
-end
-
--- Update blinking effect
-function Player.updateBlinking(dt)
-    -- Use Player.entity instead of expecting playerEntity as parameter
-    local renderer = Player.entity:getComponent("renderer")
-    if renderer then
-        renderer:update(dt)
-    end
-end
-
--- Helper function to update rotation based on movement direction
 local function updateRotation(dx, dy)
     if dx > 0 then
         return math.pi / 2
@@ -157,50 +47,70 @@ local function updateRotation(dx, dy)
     elseif dy < 0 then
         return 0
     end
-    return 0
+    return Player.rotation
 end
 
--- Step-by-step movement implementation
-function Player.updatePosition(playerEntity, dt, enemies, previewPath, enemyHitDuringMovement, onEnemyKnockback, onComboUpdate, onDamage)
+function Player.updateBlinking(dt)
+    if Player.isBlinking then
+        Player.blinkTime = Player.blinkTime - dt
+        if Player.blinkTime <= 0 then
+            Player.isBlinking = false
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Step-by-step movement when the player "confirms" their pattern path
+--------------------------------------------------------------------------------
+function Player.updatePosition(
+    dt,
+    enemies,
+    previewPath,
+    enemyHitDuringMovement,
+    onEnemyKnockback,
+    onComboUpdate,
+    onDamage
+)
     if #previewPath == 0 then
         return enemyHitDuringMovement
     end
-    
-    playerEntity.moveTimer = playerEntity.moveTimer + dt
-    if playerEntity.moveTimer < config.STEP_DELAY then
+
+    Player.moveTimer = Player.moveTimer + dt
+    if Player.moveTimer < config.STEP_DELAY then
         return enemyHitDuringMovement
     end
-    
-    -- Reset move timer for next step
-    playerEntity.moveTimer = 0
-    
-    -- Get position component
-    local position = playerEntity:getComponent("position")
-    
+
+    -- reset move timer for the next step
+    Player.moveTimer = 0
+
     -- Next target position
     local nextPos = table.remove(previewPath, 1)
     if not nextPos then
         return enemyHitDuringMovement
     end
-    
+
+    local stepDamage = nextPos[3] or 1    -- ★ NEW ★
+
     local newX, newY = nextPos[1], nextPos[2]
-    local dx, dy = newX - position.x, newY - position.y
-    
+    local dx, dy = newX - Player.x, newY - Player.y
+
     -- Check out-of-bounds
-    if newX < 1 or newX > config.GRID_SIZE or 
-       newY < 1 or newY > config.GRID_SIZE then
-        -- Attempt bounce or get pinned
-        local pinned = Player.tryBounceOrPin(playerEntity, dx, dy, enemies, onEnemyKnockback)
-        
+    if newX < 1 or newX > config.GRID_SIZE or newY < 1 or newY > config.GRID_SIZE then
+        -- We'll just do a small bounce or pinned logic if you want, but for now:
+        -- If we do want bounce logic, we handle it:
+        local pinned = Player.tryBounceOrPin(dx, dy, enemies, onEnemyKnockback)
+        if pinned and onDamage then
+            onDamage(Player, config.PIN_DAMAGE)
+        end
         -- Cancel the rest of the path
-        for i = #previewPath, 1, -1 do
-            table.remove(previewPath, i)
+        for i = #previewPath,1,-1 do
+            table.remove(previewPath,i)
         end
         
         return enemyHitDuringMovement
     end
-    
-    -- Check if an enemy is at the target position
+
+    -- Check if an enemy is there
     local occupant = nil
     for _, e in ipairs(enemies) do
         if e.x == newX and e.y == newY then
@@ -208,109 +118,168 @@ function Player.updatePosition(playerEntity, dt, enemies, previewPath, enemyHitD
             break
         end
     end
-    
+
+    local crateHere = Crate.getAt(newX, newY)  
+
+    if crateHere then
+        Crate.push(crateHere, dx, dy, enemies, Player, onComboUpdate, onDamage)  -- ★ NEW
+        -- Player cannot move onto the crate’s tile, so cancel remaining path
+        for i=#previewPath,1,-1 do previewPath[i]=nil end
+        return enemyHitDuringMovement
+    end
+
     if occupant then
-        -- Attempt to knock enemy away
-        onEnemyKnockback(occupant, dx, dy)
-        
-        -- If occupant is still there, we bounce
-        if occupant.x == newX and occupant.y == newY then
-            local pinned = Player.tryBounceOrPin(playerEntity, dx, dy, enemies, onEnemyKnockback)
-            
-            -- End movement if pinned or bounced
-            for i = #previewPath, 1, -1 do
-                table.remove(previewPath, i)
+        -- 1) Try to knock them away (or kill them)
+        onEnemyKnockback(occupant, dx, dy, stepDamage)
+
+        ------------------------------------------------------------------
+        -- 2)  If the target tile is STILL occupied *and* the enemy is
+        --     still alive, we bounce. Otherwise the player can advance.
+        ------------------------------------------------------------------
+        local stillBlocking = (occupant.health > 0)
+                             and occupant.x == newX
+                             and occupant.y == newY
+
+        if stillBlocking then
+            local pinned = Player.tryBounceOrPin(dx, dy, enemies, onEnemyKnockback)
+            if pinned and onDamage then
+                onDamage(Player, config.PIN_DAMAGE)
             end
-            
+            -- cancel the remaining path
+            for i = #previewPath, 1, -1 do previewPath[i] = nil end
             return enemyHitDuringMovement
         end
+        -- else: the enemy is dead *or* was pushed away ➜ fall through
     end
-    
-    -- Actually move the player
-    position.x = newX
-    position.y = newY
-    position.rotation = updateRotation(dx, dy)
-    
+
+    -- Actually move
+    Player.x = newX
+    Player.y = newY
+    Player.rotation = updateRotation(dx, dy)
+    local _, landedType = board.isPassable(Player.x, Player.y)
+    if landedType == "pit" then
+        Player.health = 0
+        for i = #previewPath, 1, -1 do
+            previewPath[i] = nil
+        end
+        return enemyHitDuringMovement   -- early exit
+    end
     return enemyHitDuringMovement
 end
 
--- Handle bounce or getting pinned when blocked
-function Player.tryBounceOrPin(playerEntity, dx, dy, enemies, onEnemyKnockback)
-    local position = playerEntity:getComponent("position")
-    local renderer = playerEntity:getComponent("renderer")
-    
-    -- Bounce in opposite direction
+--------------------------------------------------------------------------------
+-- Bouncing / Pin check when the player is blocked
+--------------------------------------------------------------------------------
+-- We'll return `true` if the player is pinned (game over).
+function Player.tryBounceOrPin(dx, dy, enemies, onEnemyKnockback)
+    -- We attempt to bounce 1 step in the opposite direction, then 2 steps, etc.
+    -- For simplicity, let's do a single-step bounce. If blocked => pinned.
+
     local bounceDx, bounceDy = -dx, -dy
-    local newX = position.x + bounceDx
-    local newY = position.y + bounceDy
-    
+    local newX = Player.x + bounceDx
+    local newY = Player.y + bounceDy
+
     -- Check boundaries
-    if newX < 1 or newX > config.GRID_SIZE or 
-       newY < 1 or newY > config.GRID_SIZE then
-        -- Player is pinned
+    if newX < 1 or newX > config.GRID_SIZE or newY < 1 or newY > config.GRID_SIZE then
+        -- pinned
         return true
     end
-    
-    -- Check if any enemy occupies the bounce position
+
+    -- Check occupant
     for _, e in ipairs(enemies) do
         if e.x == newX and e.y == newY then
             -- Attempt to push occupant
-            onEnemyKnockback(e, bounceDx, bounceDy)
-            
-            -- If occupant is still there, player is pinned
+            onEnemyKnockback(e, bounceDx, bounceDy, stepDamage)
+            -- If occupant is still there => pinned
             if e.x == newX and e.y == newY then
                 return true
             end
         end
     end
-    
-    -- Player can bounce
-    position.x = newX
-    position.y = newY
-    position.rotation = updateRotation(bounceDx, bounceDy)
-    
-    -- Visual feedback
-    if renderer then
-        renderer:startBlinking()
+
+    -- If we got here, we can bounce
+    Player.x = newX
+    Player.y = newY
+    Player.rotation = updateRotation(bounceDx, bounceDy)
+
+    local _, landed = board.isPassable(Player.x, Player.y)
+    if landed == "pit" then
+        Player.health = 0
+        return true            -- treat as pinned / dead
     end
-    
+
+    Player.isBlinking = true
+    Player.blinkTime  = Player.blinkDuration
     return false
 end
 
--- Draw the player
-function Player.draw(playerEntity)
-    -- Use the parameter if provided, otherwise use the stored entity
-    local entity = playerEntity or Player.entity
-    
-    -- Make sure we have a valid entity
-    if not entity then
-        print("Warning: No player entity to draw")
-        return
+----------------------------------------------------------------
+--  PLAYER SPRITES  ── normal / invincible / dead
+----------------------------------------------------------------
+-- 1.  Load all three sheets (same frame grid - 2 × 1 in this example)
+local spriteSheets = {
+    normal     = love.graphics.newImage("sprites/player_white_blue.png"),
+    invincible = love.graphics.newImage("sprites/player_white_red.png"),
+    dead       = love.graphics.newImage("sprites/player_black_blue.png"),
+}
+
+-- 2.  Shared geometry (because every sheet uses the *same* layout)
+local SPRITE_W      = 64
+local SPRITE_H      = 64
+local FRAME_COUNT   = 2          -- frames *per* sheet
+local ANIM_SPEED    = 0.20       -- seconds per frame
+
+-- 3.  Animation state (kept global so every sheet shares the clock)
+local currentFrame  = 1
+local elapsedTime   = 0
+
+function Player.draw()
+    -- pick which sheet to use for this frame --------------------
+    local sheet
+    if Player.health <= 0 then
+        sheet = spriteSheets.dead
+    elseif Player.invincible then
+        sheet = spriteSheets.invincible
+    else
+        sheet = spriteSheets.normal
     end
-    
-    entity:draw()
-end
 
--- Property getters and setters for compatibility with existing code
-function Player.getX(playerEntity)
-    return playerEntity:getComponent("position").x
-end
+    -- blink logic (re-uses your existing “isBlinking” flag) -----
+    local visible = (not Player.isBlinking)
+                    or (math.floor(Player.blinkTime * 10) % 2 == 0)
+    if not visible then return end
 
-function Player.getY(playerEntity)
-    return playerEntity:getComponent("position").y
-end
+    -- animation frame ------------------------------------------
+    local quad = love.graphics.newQuad(
+        (currentFrame-1) * SPRITE_W, 0,        -- x, y inside sheet
+        SPRITE_W, SPRITE_H,
+        sheet:getWidth(), sheet:getHeight()
+    )
 
-function Player.getHealth(playerEntity)
-    return playerEntity:getComponent("health").health
-end
+    -- board → pixel conversion ---------------------------------
+    local halfTile = config.TILE_SIZE / 2
+    local drawX    = config.GRID_START_X + (Player.x-1)*config.TILE_SIZE + halfTile
+    local drawY    = config.GRID_START_Y + (Player.y-1)*config.TILE_SIZE + halfTile
+    local scale    = config.TILE_SIZE / SPRITE_W
 
-function Player.getMaxHealth(playerEntity)
-    return playerEntity:getComponent("health").maxHealth
-end
+    love.graphics.draw(
+        sheet, quad,
+        drawX, drawY,
+        Player.rotation,      -- same rotation math you had
+        scale, scale,
+        SPRITE_W/2, SPRITE_H/2
+    )
 
-function Player.setInvincible(playerEntity, value)
-    playerEntity.invincible = value
-    playerEntity:getComponent("health").isInvincible = value
+    -- advance animation clock (dead frame stays on frame 1) -----
+    if sheet ~= spriteSheets.dead then
+        elapsedTime = elapsedTime + love.timer.getDelta()
+        if elapsedTime >= ANIM_SPEED then
+            currentFrame = currentFrame % FRAME_COUNT + 1
+            elapsedTime  = elapsedTime - ANIM_SPEED
+        end
+    else
+        currentFrame = 1      -- lock to first frame when dead
+    end
 end
 
 return Player
