@@ -1,219 +1,164 @@
-﻿-- enemy.lua (refactored for ECS architecture)
-local config = require("config")
+﻿-- enemy.lua
+local config    = require("config")
 local ChainPush = require("chainpush")
-local board = require("board")
-local colors = require("colors")
+local board     = require("board")
+local colors    = require("colors")
 local EnemyClasses = require("enemy_classes")
-local patterns = require("patterns")
-local EventManager = require("eventManager")
-local Entity = require("entity")
-local GameData = require("gameData")
+local patterns  = require("patterns")
+local ComicStrip = require("comicstrip")  
+local Crate      = require("crate")
+local PanelLog  = require("turnpanellog")
 
--- Components
-local PositionComponent = require("components.PositionComponent")
-local HealthComponent = require("components.HealthComponent")
-local RenderComponent = require("components.RenderComponent")
 
 local Enemy = {
-    list = {},           -- Stores all enemy entities
+    list            = {},
     totalHealthLost = 0, -- for scoring each turn
-    enemiesHit = 0,
-    
-    -- Movement phase properties
-    isMovementPhase = false,
-    movementQueue = {},       -- Which enemies will move
-    currentEnemyIndex = 1,    -- Which index of movementQueue is active
-    currentSteps = {},        -- The step-by-step path for the currently active enemy
-    currentStepIndex = 1,
-    stepTimer = 0
+    uniqueEnemiesHit = 0,
+
 }
 
---------------------------------------------------------------------------------
--- Helper Functions
---------------------------------------------------------------------------------
+Enemy.presetSpawns = {}   -- list of {x,y} pairs (may be empty)
+Enemy.nextPresetIdx = 1   -- 1-based circular index
 
--- Get position from entity, supporting both ECS and legacy formats
-local function getPosition(entity)
-    if entity.getComponent then
-        -- ECS style entity
-        return entity:getComponent("position")
-    else
-        -- Legacy style entity with direct x,y properties
-        return entity
-    end
+function Enemy.setPresetSpawns(list)
+    Enemy.presetSpawns  = list or {}
+    Enemy.nextPresetIdx = 1
 end
 
--- Get x position from entity
-local function getX(entity)
-    local pos = getPosition(entity)
-    return pos and (pos.x or pos.x) or 0
-end
+Enemy.isMovementPhase = false
+Enemy.movementQueue = {}       -- Which enemies will move
+Enemy.currentEnemyIndex = 1    -- Which index of movementQueue is active
+Enemy.currentSteps = {}        -- The step-by-step path for the currently active enemy
+Enemy.currentStepIndex = 1
+Enemy.stepTimer = 0
 
--- Get y position from entity
-local function getY(entity)
-    local pos = getPosition(entity)
-    return pos and (pos.y or pos.y) or 0
-end
-
--- Set position for entity
-local function setPosition(entity, x, y)
-    if entity.getComponent then
-        -- ECS style entity
-        local pos = entity:getComponent("position")
-        if pos then
-            pos.x = x
-            pos.y = y
+------------------------------------------------------------------
+--  Utility : is any live enemy *or* crate on (x,y) ?
+------------------------------------------------------------------
+function Enemy.isOccupied(x, y)
+    for _, e in ipairs(Enemy.list) do         -- enemies first
+        if e.health > 0 and e.x == x and e.y == y then
+            return true
         end
-    else
-        -- Legacy style entity with direct properties
-        entity.x = x
-        entity.y = y
     end
+    return Crate.getAt(x, y) ~= nil           -- crates too
 end
 
 --------------------------------------------------------------------------------
 -- Spawning
 --------------------------------------------------------------------------------
-function Enemy.spawnWave(waveData, playerEntity)
+function Enemy.spawnWave(waveData, playerX, playerY)
     for className, count in pairs(waveData) do
         for i = 1, count do
-            Enemy.spawnOneEnemy(className, playerEntity)
+            Enemy.spawnOneEnemy(className, playerX, playerY)
         end
     end
 end
 
-function Enemy.spawnOneEnemy(className, playerEntity)
+local function randomFreeTile(px, py)
+    local choiceX, choiceY, seen = nil, nil, 0          -- reservoir vars
+    for tx = 1, board.width do
+        for ty = 1, board.height do
+            local passable, t = board.isPassable(tx, ty)
+            passable = passable and (t ~= "pit")
+            local free = passable
+                       and not Enemy.isTileOccupiedByEnemy(tx, ty)
+                       and not Crate.getAt(tx, ty)
+                       and not Enemy.isInSafeZone(tx, ty, px, py,
+                                                   config.SAFE_ZONE_RADIUS)
+            if free then
+                seen = seen + 1
+                if math.random(seen) == 1 then   -- **reservoir step**
+                    choiceX, choiceY = tx, ty
+                end
+            end
+        end
+    end
+    return choiceX, choiceY          -- nil if the board is full
+end
+
+function Enemy.spawnOneEnemy(className, playerX, playerY)
     local classData = EnemyClasses[className]
     if not classData then
         print("Unknown enemy class:", className)
         return
     end
 
+    ---------------------------------------------------------------
+    -- ①  find a free tile
+    --     • try preset points first          (no safe-zone check)
+    --     • if all blocked ➜ original random routine
+    ---------------------------------------------------------------
     local x, y
-    local valid = false
-    while not valid do
-        x = math.random(1, config.GRID_SIZE)
-        y = math.random(1, config.GRID_SIZE)
 
-        local passable = board.isPassable(x, y)
-        local notOccupied = not Enemy.isTileOccupiedByEnemy(x, y)
-        local notInSafeZone = not Enemy.isInSafeZone(x, y, playerEntity, config.SAFE_ZONE_RADIUS)
-
-        valid = passable and notOccupied and notInSafeZone
-    end
-
-    -- Create a new entity
-    local enemyEntity = Entity.new()
-    
-    -- Add position component
-    enemyEntity:addComponent(PositionComponent.new(x, y))
-    
-    -- Add health component
-    enemyEntity:addComponent(HealthComponent.new(classData.maxHealth))
-    
-    -- Add render component for visual representation
-    local renderer = RenderComponent.new(classData.color, 1.0)
-    
-    -- Customize renderer for enemy-specific drawing
-    function renderer:draw()
-        local position = self.entity:getComponent("position")
-        local health = self.entity:getComponent("health")
-        
-        if not position or not health then return end
-        if health.health <= 0 then return end
-        
-        local ex = config.GRID_START_X + (position.x - 1) * config.TILE_SIZE
-        local ey = config.GRID_START_Y + (position.y - 1) * config.TILE_SIZE
-        
-        local shouldDraw = (not self.isBlinking) or (math.floor(self.blinkTime * 10) % 2 == 0)
-        local shouldPreviewDraw = self.entity.onPreviewPath and (math.floor(self.entity.previewBlinkTime * 10) % 2 == 0)
-        
-        if shouldDraw or shouldPreviewDraw then
-            if self.isBlinking and shouldDraw then
-                love.graphics.setColor(colors.Damage)
-            elseif self.entity.onPreviewPath and shouldPreviewDraw then
-                love.graphics.setColor(colors.previewDamage)
-            else
-                -- choose color based on className, then health
-                local hp = math.floor(health.health + 0.5)
-                if hp < 1 then hp = 1 end
-                if hp > 10 then hp = 10 end
-                local className = self.entity.className or "grunt"
-                local classColorTable = colors.enemyHealth[className]
-                if not classColorTable then
-                    classColorTable = colors.enemyHealth["grunt"]
-                end
-                local colorToUse = classColorTable[hp] or colors.white
-                love.graphics.setColor(colorToUse)
+    -- A)  cycle through preset list once (skip blocked spots)
+    if #Enemy.presetSpawns > 0 then
+        local pool = {}
+        for _, pair in ipairs(Enemy.presetSpawns) do
+            local tx, ty = pair[1], pair[2]
+            local passable, tile = board.isPassable(tx, ty)
+            passable = passable and (tile ~= "pit")
+            local free = passable
+                       and not Enemy.isTileOccupiedByEnemy(tx, ty)
+                       and not Crate.getAt(tx, ty)          -- safe-zone deliberately
+            if free then                                    -- **not** checked here
+                table.insert(pool, {tx, ty})
             end
-            
-            love.graphics.rectangle("fill", ex, ey, config.TILE_SIZE, config.TILE_SIZE)
         end
-        
-        -- Health text
-        love.graphics.setColor(colors.white)
-        local txt = tostring(health.health)
-        local enemyHealthFont = love.graphics.getFont() -- or your specific font
-        local tw = enemyHealthFont:getWidth(txt)
-        local th = enemyHealthFont:getHeight()
-        love.graphics.print(txt, ex + (config.TILE_SIZE - tw)/2, ey + (config.TILE_SIZE - th)/2)
+        if #pool > 0 then
+            local pick = pool[math.random(#pool)]           -- uniform choice
+            x, y = pick[1], pick[2]
+        end
     end
-    
-    enemyEntity:addComponent(renderer)
 
-    -- Add enemy-specific properties
-    enemyEntity.className = className
-    enemyEntity.name = classData.name
-    enemyEntity.power = classData.power
-    enemyEntity.patternName = classData.patternName
-    enemyEntity.attackDamage = classData.power
-    
-    -- State properties
-    enemyEntity.alreadyHit = false
-    enemyEntity.skipTurn = false
-    enemyEntity.knockedBack = false
-    enemyEntity.hit = false
-    
-    -- Visual effect properties
-    enemyEntity.blinkTime = 0
-    enemyEntity.blinkDuration = 1.0
-    enemyEntity.previewBlinkTime = 0
-    enemyEntity.previewBlinkDuration = 0.5
-    enemyEntity.onPreviewPath = false
+    if not x then
+        x, y = randomFreeTile(playerX, playerY)
+    end
 
-    table.insert(Enemy.list, enemyEntity)
-    
-    -- Emit event for enemy spawned
-    EventManager:emit("enemy_spawned", enemyEntity)
-    
-    return enemyEntity
+    if not x then
+        print("[WARN] No valid spawn tile found for enemy – wave trimmed")
+        return
+    end
+
+    ---------------------------------------------------------------
+    -- ②  create the enemy once we have a safe tile
+    ---------------------------------------------------------------
+    local newEnemy = {
+        x = x, y = y,
+        className   = className,
+        name        = classData.name,
+        color       = classData.color,
+        maxHealth   = classData.maxHealth,
+        health      = classData.maxHealth,
+        power       = classData.power,
+        patternName = classData.patternName,
+
+        alreadyHit    = false,
+        skipTurn      = false,
+        knockedBack   = false,
+        blinkTime     = 0,
+        blinkDuration = 1.0,
+        previewBlinkTime     = 0,
+        previewBlinkDuration = 0.5,
+        hit           = false,
+        onPreviewPath = false,
+        attackDamage  = classData.power,
+    }
+
+    table.insert(Enemy.list, newEnemy)
 end
+
 
 function Enemy.isTileOccupiedByEnemy(x, y)
     for _, enemy in ipairs(Enemy.list) do
-        local position = getPosition(enemy)
-        if position.x == x and position.y == y then
+        if enemy.x == x and enemy.y == y then
             return true
         end
     end
     return false
 end
 
-function Enemy.isInSafeZone(x, y, playerEntity, radius)
-    local px, py
-    
-    -- Get player position based on entity type
-    if playerEntity.getComponent then
-        -- If using the full entity
-        local position = playerEntity:getComponent("position")
-        px = position.x
-        py = position.y
-    else
-        -- Backward compatibility for direct position
-        px = playerEntity.x
-        py = playerEntity.y
-    end
-    
+function Enemy.isInSafeZone(x, y, px, py, radius)
     local dist = math.sqrt((px - x)^2 + (py - y)^2)
     return dist <= radius
 end
@@ -226,9 +171,9 @@ function Enemy.bfsNextStep(sx, sy, tx, ty)
         return nil
     end
 
-    local queue = {}
+    local queue   = {}
     local visited = {}
-    local cameFrom = {}
+    local cameFrom= {}
 
     table.insert(queue, {x = sx, y = sy})
     visited[sx..":"..sy] = true
@@ -250,9 +195,12 @@ function Enemy.bfsNextStep(sx, sy, tx, ty)
         for _, d in ipairs(directions) do
             local px = nx + d[1]
             local py = ny + d[2]
-            local passable = board.isPassable(px, py)
+            local passable, tileType = board.canMove(nx, ny, d[1], d[2])
+            passable = passable and (tileType ~= "pit")
             local occ = Enemy.isTileOccupiedByEnemy(px, py)
-            if passable and (not occ) and (not visited[px..":"..py]) then
+            local crate = Crate.getAt(px, py)
+            if passable and (tileType ~= "pit") and (not occ) and (not crate)
+                and (not visited[px..":"..py]) then
                 visited[px..":"..py] = true
                 cameFrom[px..":"..py] = {nx, ny}
                 table.insert(queue, {x=px, y=py})
@@ -261,7 +209,30 @@ function Enemy.bfsNextStep(sx, sy, tx, ty)
     end
 
     if not found then
-        return nil
+        ----------------------------------------------------------------
+        --  Fallback: single Manhattan step toward the target
+        ----------------------------------------------------------------
+        local dx = math.sign(tx - sx)
+        local dy = math.sign(ty - sy)
+
+        -- Favour the axis with the larger distance
+        if math.abs(tx - sx) > math.abs(ty - sy) then
+            dy = 0
+        else
+            dx = 0
+        end
+
+        local fx, fy = sx + dx, sy + dy
+        local passable, tileType = board.canMove(sx, sy, dx, dy)
+        passable = passable and (tileType ~= "pit")
+        local occ = Enemy.isTileOccupiedByEnemy(fx, fy)
+
+        if passable and (tileType ~= "pit") and (not occ) then
+            return {fx, fy}              -- one‑step “best guess”
+        end
+
+        return nil                       -- truly stuck
+
     end
 
     -- reconstruct path
@@ -278,29 +249,26 @@ end
 
 function Enemy.getEnemyAt(x, y)
     for _, e in ipairs(Enemy.list) do
-        local position = getPosition(e)
-        if position.x == x and position.y == y then
+        if e.x == x and e.y == y then
             return e
         end
     end
     return nil
 end
 
---------------------------------------------------------------------------------
--- Movement Phase
---------------------------------------------------------------------------------
-function Enemy.beginMovementPhase(playerEntity)
+
+function Enemy.beginMovementPhase(playerX, playerY)
     -- 1) Clear the movement queue
     Enemy.movementQueue = {}
 
     -- 2) If the enemy was knockedBack or hit last turn, mark skipTurn = true
     for _, e in ipairs(Enemy.list) do
         if e.knockedBack or e.hit then
-            e.skipTurn = true
+            e.skipTurn    = true
             e.knockedBack = false -- reset for future
-            e.hit = false
+            e.hit         = false
         else
-            e.skipTurn = false
+            e.skipTurn    = false
         end
     end
 
@@ -320,29 +288,23 @@ function Enemy.beginMovementPhase(playerEntity)
     end)
 
     -- 5) Flag that the movement phase has started
-    Enemy.isMovementPhase = true
-    Enemy.currentEnemyIndex = 1
-    Enemy.currentSteps = {}
+    Enemy.isMovementPhase  = true
+    Enemy.currentEnemyIndex= 1
+    Enemy.currentSteps     = {}
     Enemy.currentStepIndex = 1
-    Enemy.stepTimer = 0
-    
-    -- Emit event for movement phase start
-    EventManager:emit("enemy_movement_phase_began")
+    Enemy.stepTimer        = 0
 end
 
-function Enemy.updateMovementPhase(dt, playerEntity, onPlayerHit)
-    -- If we've finished all enemies, end the phase
+function Enemy.updateMovementPhase(dt, Player, onPlayerHit)
+    -- If we’ve finished all enemies, end the phase
     if Enemy.currentEnemyIndex > #Enemy.movementQueue then
         Enemy.isMovementPhase = false
 
         -- Disable player invincibility after ALL enemies have moved
-        if playerEntity and playerEntity.invincible then
-            playerEntity.invincible = false
-        end
-        
-        -- Emit event for movement phase end
-        EventManager:emit("enemy_movement_phase_ended")
-        
+        if Player.invincible then
+            Player.invincible = false
+    end
+
         return
     end
 
@@ -350,19 +312,24 @@ function Enemy.updateMovementPhase(dt, playerEntity, onPlayerHit)
 
     -- If we have no steps yet for this enemy, compute them now
     if #Enemy.currentSteps == 0 then
-        local playerPos = getPosition(playerEntity)
-        Enemy.currentSteps = Enemy.determineEnemySteps(e, playerPos.x, playerPos.y)
+        Enemy.currentSteps = Enemy.determineEnemySteps(e, Player.x, Player.y)
         Enemy.currentStepIndex = 1
         Enemy.stepTimer = 0
     end
 
-    -- If that set is empty or we're done, move to the next enemy
+    -- If that set is empty or we’re done, move to the next enemy
     if Enemy.currentStepIndex > #Enemy.currentSteps then
         -- Move on to next enemy
         Enemy.currentEnemyIndex = Enemy.currentEnemyIndex + 1
         Enemy.currentSteps = {}
         Enemy.currentStepIndex = 1
         Enemy.stepTimer = 0
+
+        if Enemy.currentEnemyIndex > #Enemy.movementQueue then
+            Enemy.isMovementPhase = false
+            if Player.invincible then Player.invincible = false end
+        end
+
         return
     end
 
@@ -375,57 +342,102 @@ function Enemy.updateMovementPhase(dt, playerEntity, onPlayerHit)
         local step = Enemy.currentSteps[Enemy.currentStepIndex]
         local dx, dy = step[1], step[2]
 
-        -- Get enemy position
-        local ePos = getPosition(e)
-        local playerPos = getPosition(playerEntity)
-        
         -- Check if that next position is the player's tile
-        local nextX = ePos.x + dx
-        local nextY = ePos.y + dy
-        if nextX == playerPos.x and nextY == playerPos.y then
-            -- Possibly move onto player tile if not invincible
-            if not playerEntity.invincible then
-                setPosition(e, nextX, nextY)
-                onPlayerHit(dx, dy, e)  -- e attacks the player
+        local nextX = e.x + dx
+        local nextY = e.y + dy
+        if nextX == Player.x and nextY == Player.y then
+            --------------------------------------------------------------
+            -- (A) Player invincible ⇒ abort path (existing rule)
+            --------------------------------------------------------------
+            if Player.invincible then
+                Enemy.currentStepIndex = #Enemy.currentSteps +1     -- give up
+                return
             end
-        else
-            -- Check passability or occupant
-            local passable = board.isPassable(nextX, nextY)
-            local occupant = Enemy.getEnemyAt(nextX, nextY)
-            if passable and (not occupant) then
-                -- Move
-                setPosition(e, nextX, nextY)
+
+            --------------------------------------------------------------
+            -- (B) Try to push the player
+            --------------------------------------------------------------
+            local oldPX, oldPY = Player.x, Player.y
+            onPlayerHit(dx, dy, e)            -- may displace, may fail
+
+            local pushSucceeded = (Player.x ~= oldPX or Player.y ~= oldPY)
+
+            if pushSucceeded then
+                ----------------------------------------------------------
+                -- Player moved → enemy occupies the vacated tile
+                ----------------------------------------------------------
+                e.x, e.y = nextX, nextY
+                --if applyDamage then
+                --    applyDamage(Player, e.power)      -- e.power is 1,2,3 … per class
+                --end
             else
-                -- blocked => do no further steps
+                ----------------------------------------------------------
+                -- Player pinned  → inflict pin‑damage and side‑step
+                ----------------------------------------------------------
+                --applyDamage(Player, config.PIN_DAMAGE)
+
+                local perp = { {-dy, dx}, {dy, -dx} }    -- left / right
+                -- randomise order so it doesn't bias
+                if math.random(2) == 2 then perp[1], perp[2] = perp[2], perp[1] end
+
+                local sidestepped = false
+                for _, v in ipairs(perp) do
+                    local sx, sy = e.x + v[1], e.y + v[2]
+                    local passable, tileType = board.canMove(e.x, e.y, v[1], v[2]) -- ignoreEnemies = false
+                    if passable and tile ~= "pit"
+                       and not Enemy.isOccupied(sx, sy)   -- no stack
+                    then
+                        e.x, e.y = sx, sy
+                        sidestepped = true
+                        break
+                    end
+                end
+                -- If both sideways tiles were blocked, enemy simply stays put.
+            end
+
+            Enemy.currentStepIndex = #Enemy.currentSteps +1        -- stop path
+            return
+            -- Check passability or occupant
+        else
+            local passable, tileType = board.canMove(e.x, e.y, dx, dy)
+            passable = passable and (tileType ~= "pit")
+            local occupant = Enemy.getEnemyAt(nextX, nextY)          -- NEW
+            local crateThere = Crate.getAt(nextX, nextY) 
+            if passable and (not occupant) and (not crateThere) then                      -- case B
+                e.x = nextX
+                e.y = nextY
+
+                local _, landed = board.isPassable(e.x, e.y)         -- pit kill
+                if landed == "pit" then
+                    e.health = 0
+                    Enemy.recordHit(e, e.maxHealth)
+                end
+            else                                                     -- blocked
                 Enemy.currentStepIndex = #Enemy.currentSteps
             end
         end
-
         -- Mark that we completed this step
         Enemy.currentStepIndex = Enemy.currentStepIndex + 1
-        
-        -- Emit step completed event
-        EventManager:emit("enemy_step_completed", e, dx, dy)
     end
 end
 
 function Enemy.determineEnemySteps(e, px, py)
-    -- Get enemy position
-    local ePos = getPosition(e)
-    
     -- 1) If enemy is already in player tile, no steps
-    if ePos.x == px and ePos.y == py then
+    if e.x == px and e.y == py then
         return {}
     end
 
     -- 2) BFS or just get direction
-    local nextTile = Enemy.bfsNextStep(ePos.x, ePos.y, px, py)  -- the single step
+    --    Right now, you used BFS for single-step direction, then you have
+    --    a pattern (like Knight which is up, up, left).
+
+    local nextTile = Enemy.bfsNextStep(e.x, e.y, px, py)  -- the single step
     if not nextTile then
         return {}
     end
 
-    local dx = nextTile[1] - ePos.x
-    local dy = nextTile[2] - ePos.y
+    local dx = nextTile[1] - e.x
+    local dy = nextTile[2] - e.y
 
     -- 3) Transform the base pattern to the correct orientation
     local basePattern = patterns[e.patternName]
@@ -437,6 +449,7 @@ function Enemy.determineEnemySteps(e, px, py)
     local steps = Enemy.translatePattern(basePattern, dx, dy)
     return steps
 end
+
 
 function Enemy.translatePattern(basePattern, dx, dy)
     local direction
@@ -477,19 +490,42 @@ end
 --------------------------------------------------------------------------------
 function Enemy.recordHit(enemy, damageDealt)
     if damageDealt <= 0 then return end
-    
-    if not enemy.alreadyHit then
-        Enemy.enemiesHit = Enemy.enemiesHit + 1
-        enemy.alreadyHit = true
+
+    ------------------------------------------------------------
+    -- 1)  Which tile did the hit occur on?
+    ------------------------------------------------------------
+    local tile = enemy.hitTile          -- set by ChainPush
+    enemy.hitTile = nil                 -- consume the flag
+    if not tile then                    -- fallback (e.g. lasers, spells)
+        local _, t = board.isPassable(enemy.x, enemy.y)
+        tile = t
     end
-    
-    Enemy.totalHealthLost = Enemy.totalHealthLost + damageDealt
-    
-    -- Emit enemy hit event
-    EventManager:emit("enemy_hit_recorded", enemy, damageDealt)
+
+    ------------------------------------------------------------
+    -- 2)  Per-HP score with optional bonus
+    ------------------------------------------------------------
+    local perHP = config.SCORE_PER_HP            -- e.g. 10
+    if tile == "scoreBonus" then                 -- gold tile
+        perHP = perHP + config.SCORE_BONUS_PER_HP
+    end
+    Enemy.totalHealthLost  = Enemy.totalHealthLost  + damageDealt
+
+    ------------------------------------------------------------
+    -- 3)  Update enemiesHit  (green tiles always add +1)
+    ------------------------------------------------------------
+    local added = 0
+    if not enemy.alreadyHit then            -- first contact with this enemy?
+        added = added + 1                   -- normal “one enemy”
+        enemy.alreadyHit = true
+        PanelLog.record("enemyHit", tile)  
+        Enemy.uniqueEnemiesHit    = Enemy.uniqueEnemiesHit + 1
+    end
+    if tile == "scoreDouble" then           -- standing on a green tile?
+        added = added + config.SCORE_DOUBLE_EXTRA   -- usually +1
+    end
 end
 
-function Enemy.applyKnockback(enemy, dx, dy, onComboUpdate, enemyHitDuringMovementRef, onDamage)
+function Enemy.applyKnockback(enemy, dx, dy, onComboUpdate, enemyHitDuringMovementRef, onDamage, baseDamage)
     local pinnedRef = { pinned = false }
 
     ChainPush.pushEntity(
@@ -499,12 +535,9 @@ function Enemy.applyKnockback(enemy, dx, dy, onComboUpdate, enemyHitDuringMoveme
         nil,               -- no explicit Player reference
         onComboUpdate,
         pinnedRef,
-        config.BASE_PUSH_DAMAGE,
+        baseDamage or 1,           -- ★ variable ★
         onDamage
     )
-    
-    -- Emit knockback event
-    EventManager:emit("enemy_knockback_applied", enemy, dx, dy, pinnedRef.pinned)
 
     if not pinnedRef.pinned then
         -- success
@@ -517,76 +550,37 @@ end
 --------------------------------------------------------------------------------
 -- Turn Stats
 --------------------------------------------------------------------------------
-function Enemy.resetTurnStats()
-    Enemy.totalHealthLost = 0
-    Enemy.enemiesHit = 0
-    for _, e in ipairs(Enemy.list) do
-        e.alreadyHit = false
-    end
-    
-    -- Emit event for turn stats reset
-    EventManager:emit("enemy_turn_stats_reset")
-end
 
-function Enemy.calculateTurnScore()
-    local score = 0
-    if Enemy.enemiesHit > 0 then
-        score = (Enemy.enemiesHit * 10) * Enemy.totalHealthLost
-    end
-    
-    -- Emit event for turn score calculated
-    EventManager:emit("enemy_turn_score_calculated", score)
-    
-    return score
-end
 
 --------------------------------------------------------------------------------
 -- Update / Draw
 --------------------------------------------------------------------------------
 function Enemy.removeDeadEnemies()
-    local removedCount = 0
     for i = #Enemy.list, 1, -1 do
-        local enemy = Enemy.list[i]
-        local health = enemy:getComponent("health")
-        
-        if health and health.health <= 0 then
-            -- Emit event before removal
-            EventManager:emit("enemy_removed", enemy)
-            
+        if Enemy.list[i].health <= 0 then
             table.remove(Enemy.list, i)
-            removedCount = removedCount + 1
         end
     end
-    
-    -- If all enemies are gone, emit an event
-    if #Enemy.list == 0 then
-        EventManager:emit("all_enemies_defeated")
-    end
-    
-    return removedCount
 end
 
 function Enemy.updateBlinking(dt, previewPath)
     for _, enemy in ipairs(Enemy.list) do
-        -- Reset preview path flag
         enemy.onPreviewPath = false
-        
-        -- Get the renderer component
-        local renderer = enemy:getComponent("renderer")
-        if renderer then
-            renderer:update(dt)
+
+        if enemy.isBlinking then
+            enemy.blinkTime = enemy.blinkTime - dt
+            if enemy.blinkTime <= 0 then
+                enemy.isBlinking = false
+            end
         end
-        
-        -- Check if enemy is on preview path
+
         for _, pos in ipairs(previewPath) do
-            local enemyPos = getPosition(enemy)
-            if enemyPos.x == pos[1] and enemyPos.y == pos[2] then
+            if enemy.x == pos[1] and enemy.y == pos[2] then
                 enemy.onPreviewPath = true
                 break
             end
         end
-        
-        -- Update preview blink effect
+
         if enemy.onPreviewPath then
             enemy.previewBlinkTime = enemy.previewBlinkTime - dt
             if enemy.previewBlinkTime <= 0 then
@@ -599,16 +593,45 @@ function Enemy.updateBlinking(dt, previewPath)
 end
 
 function Enemy.draw(enemyHealthFont, previewPath)
-    -- Set font for health display
     love.graphics.setFont(enemyHealthFont)
-    
-    -- Draw each enemy
     for _, enemy in ipairs(Enemy.list) do
-        -- Use entity's draw method (which uses renderer component)
-        enemy:draw()
+        if enemy.health > 0 then
+            local ex = config.GRID_START_X + (enemy.x - 1) * config.TILE_SIZE
+            local ey = config.GRID_START_Y + (enemy.y - 1) * config.TILE_SIZE
+
+            local shouldDraw = (not enemy.isBlinking) or (math.floor(enemy.blinkTime * 10) % 2 == 0)
+            local shouldPreviewDraw = enemy.onPreviewPath and (math.floor(enemy.previewBlinkTime * 10) % 2 == 0)
+
+            if shouldDraw or shouldPreviewDraw then
+                if enemy.isBlinking and shouldDraw then
+                    love.graphics.setColor(colors.Damage)
+                elseif enemy.onPreviewPath and shouldPreviewDraw then
+                    love.graphics.setColor(colors.previewDamage)
+                else
+                    -- choose color based on className, then health
+                    local hp = math.floor(enemy.health + 0.5)
+                    if hp < 1 then hp = 1 end
+                    if hp > 10 then hp = 10 end
+                    local className = enemy.className or "grunt"
+                    local classColorTable = colors.enemyHealth[className]
+                    if not classColorTable then
+                        classColorTable = colors.enemyHealth["grunt"]
+                    end
+                    local colorToUse = classColorTable[hp] or colors.white
+                    love.graphics.setColor(colorToUse)
+                end
+
+                love.graphics.rectangle("fill", ex, ey, config.TILE_SIZE, config.TILE_SIZE)
+            end
+
+            -- Health text
+            love.graphics.setColor(colors.white)
+            local txt = tostring(enemy.health)
+            local tw  = enemyHealthFont:getWidth(txt)
+            local th  = enemyHealthFont:getHeight()
+            love.graphics.print(txt, ex + (config.TILE_SIZE - tw)/2, ey + (config.TILE_SIZE - th)/2)
+        end
     end
-    
-    -- Reset color
     love.graphics.setColor(colors.white)
 end
 

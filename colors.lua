@@ -1,25 +1,42 @@
--- colors.lua
+﻿-- colors.lua
 local colors = {}
 
-colors.white = {1,1,1}
+colors.white = {0.97, 0.97, 0.97}
 colors.black = {0,0,0}
 
 colors.wall         = {155/255, 58/255, 54/255}
-colors.floorOutline = {26/255, 26/255, 26/255}
-colors.floorFill    = {52/255, 58/255, 64/255}
+colors.floorOutline = {51/255, 68/255, 68/255}
+colors.floorFill    = {99/255, 111/255, 111/255}
+colors.edgeWall     = {0,0,0}
+--colors.floorOutline = {15/255, 34/255, 45/255}
+--colors.floorFill    = {46/255, 60/255, 67/255}
+colors.pit = {0,0,0}
+colors.scoreDoubleTile = {  0/255, 200/255,   0/255 }   -- green
+colors.scoreBonusTile  = {255/255, 215/255,   0/255 }   -- gold-ish
+colors.goldText = {1.00, 0.84, 0.00}   -- warm yellow
 
-colors.uiPanelBackground = {210/255, 212/255, 191/255}
-colors.scoreColor        = {60/255, 67/255, 85/255}
-colors.comboActive       = {60/255, 67/255, 85/255}
-colors.comboInactive     = {0.5, 0.5, 0.5}
+
+-- old color: colors.uiPanelBackground = {210/255, 212/255, 191/255}
+colors.uiPanelBackground = {106/255, 78/255, 70/255}
+
+colors.scoreColorPanel        = {0.97, 0.97, 0.97}
+colors.scoreColorCenter        = {255/255, 255/255, 255/255}
+colors.comboActive       = {0.97, 0.97, 0.97}
+colors.comboInactive     = {0.97, 0.97, 0.97}
 colors.invincibleText    = {196/255, 63/255, 49/255}
-colors.PlayerHealthFull  = {37/255, 148/255, 62/255}
+colors.PlayerHealthFull  = {83/255, 218/255, 83/255}
 colors.PlayerHealthEmpty = {0.5, 0.5, 0.5}
 
 colors.previewPath    = {251/255, 235/255, 185/255}
 colors.previewDamage  = {221/255, 100/255, 87/255}
 colors.Damage         = {196/255, 63/255, 49/255}
 colors.SuperKnockback = {196/255, 63/255, 49/255}
+colors.comboGaugeEmpty = {0.55, 0.55, 0.55}  
+
+colors.turnBlue       = {  69/255, 182/255, 180/255 }  -- player is choosing
+colors.turnGreen      = {  0/255, 180/255,  80/255 }  -- choice validated / player moving
+colors.turnRedSoft    = { 220/255,  64/255,  64/255 } -- enemy pause
+colors.turnRedHard    = { 150/255,   0/255,   0/255 } -- enemy movement
 
 colors.enemyHealth = {
     grunt = {
@@ -59,5 +76,13 @@ colors.enemyHealth = {
         [1]  = {140/255, 220/255, 160/255},
     },
 }
+
+colors.rarityBorder = {
+    common     = {1,1,1},          -- white
+    rare       = {0,0.6,1},        -- blue‑ish
+    epic       = {0.6,0,1},        -- purple
+    legendary  = {1,0.6,0},        -- orange
+}
+
 
 return colors

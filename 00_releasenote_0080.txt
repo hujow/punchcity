@@ -1,0 +1,106 @@
+0033: 
+Completed timer based mechanic implementation (fixed issues)
+Changed timer gauge colors to have a player and an enemy color. 
+
+0034:
+Remove some unused variables
+
+0035: 
+Added pits & title screen
+
+0040:
+Changed target score display
+
+0041: 
+Changed movement mechanic: 
+a direction is always selected, 
+the direction selected at the end of the timer 
+(or when V is pressed) is the movement direction chosen
+
+
+0042:
+Previewpath displays in the direction the player was facing last turn.  
+Deckbuilding: 
+	- Start with 3 patterns
+	- Draw a new one each time the score reaches a milestone
+
+
+0050: Deck building system: player can add patterns to their deck
+
+0051: Scoring sequence added after player movement sequence
+
+0052: 
+- added differentiated damage within patterns
+- Patterns are drawn by the game instead of using pngs
+- drawn patterns reflect the damage of each pattern
+
+0053: 
+- bug fixes
+- no double patterns on choice screen
+- QoL (delays between sequences)
+
+0054: 
+- rarity system on pattern rewards
+- bug fixes & QoL
+
+
+0055: 
+- bug fixes
+ 
+0056: 
+- grid can now be a rectangle
+- UI layout change
+
+0057: 
+- UI layout change: 2 panels on the left for score and patterns,
+grid is a rectangle in the top 2/3rdish of the screen
+
+0060:
+- Adding comic book panel feedback system
+- UI layout and colors iteration
+
+0061 & 0062: 
+- Iteration on comic book panel feedback system and layout
+
+0063: 
+- Add 2 types of bonus tiles to improve scoring when players hits an enemy on them
+(improve multiplier or improve base score value)
+
+0064:
+- Add new gameplay element: Crates (can be moved when hit and can hit an enemy and trigger
+chainpush
+- Display different sprite when the player is invicible or dead. 
+
+0065: Add new panels and improved panel behaviors
+
+0066: 
+- endturn has moved after enemy movement phase and the panels are now displayed
+at this point, when the scoring is displayed.
+- changed controls to rotate preview path clockwise and anticlockwise and spae to skip
+to the next phase
+
+0070: 
+- changed how scoring works, based on panel display not ennemies hurt. 
+
+0071
+- Debugging how new scoring works. 
+0072
+- Debugging how new scoring works
+0073
+- Debugging of scoring
+- New panel for slam damage
+- Crate blink when on path previews
+- changed the assets for panels
+0074
+- Added tile edges to create walls between tiles
+0075
+- changed panel display (one panel displayed per tag) and 
+added a sticker for counting the number of occurences of a tag
+
+0076 
+- Improved panel display flow and animation
+- Changed pattern drawing rules for 7-bag system
+
+080
+-changed the pattern deckbuilding mechanic to a shop mechanic: player earns gold 
+by completing levels and can spend it to purchase new patterns in a shop between levels. 

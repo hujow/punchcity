@@ -1,0 +1,58 @@
+Features: 
+- Title screen
+- Board generation & display
+	- Obstacles : 
+		- Walls as tiles
+		- Pits: player an enemies can fall in them and die
+		- Crates: 
+			- Can be pushed, they slide until hitting an obstacle (enemy or enviro). 
+			- Player can bounce back when hitting an enemy against a crate, it destroys the crate
+	- Bonus tiles which improve scoring formula (base score or mult)
+		 
+
+- UI display
+- Player movement
+	- Preview path
+	- Direction switch (space)
+	- Validation (v)
+- Player characteristics (Health, Power)
+- Pattern generation
+- Pattern holding
+
+- Enemies
+	- Spawning
+	- Display
+	- Behavior
+	- Characteristics (Health, Power, Pattern)
+	- Classes
+- Enemy waves
+- Combat
+	- Moving on a square with enemies hurts them and knocks them back
+	- Damage value depends on the pattern step
+	- Chain knockback: if several enemies are one behind another, they all get knocked back
+	- If an enemy is pinned against a wall/obstacle, they get slam damage on top of normal damage
+
+- Combo & Powers
+	- Invincibility after a few successful hits
+	- Superknockback: super attack when combo threshold is reached
+
+- Turns: Player and enemies move one after the other, all enemies move one by one during their turn
+
+- Scoring
+	- Actions during player and enemy turn can trigger panel display, each panel grants a base value and a multiplier value. 
+		all triggered panels value are added and calcultated to define the turn score
+
+- Progression
+	- Target score
+	- Pattern deckbuilding with rarity:player can purchase new patterns in a 
+	shop between levels. 
+	Player can earn gold during level
+	Player can earn interest by keeping money between rounds
+- Levels
+- Victory conditions
+	- Kill all enemies
+
+- Comic book panel feedback system
+
+- Scoring is based on comic book panels displayed
+	

@@ -6,7 +6,7 @@ local EnemyClasses = {
         name         = "Grunt",
         color        = colors.enemyHealth.grunt[4],
         maxHealth    = 4,
-        power        = 1,
+        power        = 3,
         patternName  = "enemy_singleStep",
     },
     knight = {
